@@ -1,0 +1,195 @@
+---
+title: "Iron Tolerance in Blood Feeding vs Obligate Non Biting Populations of the Pitcher Plant Mosquito, Wyeomyia smithii"  
+subtitle: "Replication of Honors Thesis Analysis and Figures"
+author: "Sophia Bevans"
+output: github_document
+---
+```{r, setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "~/UofO/Thesis")
+```
+
+Reproduction of analysis detailed in experimental design given by Dr. Bill Bradshaw and Dr. Christina Holzapfel in document "Sophia Experiments II".
+
+
+```{r load packages}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(lubridate))
+```
+
+## Data
+Wyeomyia smithii populations: KC, ML (non-biting), WI, LI (biting) were collected from Maine, Wisconsin, Florida, and Alabama, respectively, in the summer of 2016.  
+Experimental groups: 0 = treatment (water), 1 = 13mg/L ferrous sulfate, 2 = 130mg/L ferrous sulfate  
+Column names refer to population and experimental group (ex: WI0 is control group from Florida)  
+
+Treatment group ML0 is missing in the data due to issues with experimental equipment.
+
+pupae contains date of pupation for pupae in each treatment group  
+pupa_sex contains sex and eclosion date of pupae in each treatment group  
+adult_sex contains sex and date of death for adults in each treatment group    
+eggs contains date and counts of eggs from each treatment group   
+hatch counts contains date and counts of hatch from each treatment group  
+
+
+```{r read in data, message=FALSE}
+pupae <- read_csv("iron_tolerance_pupae.csv")
+pupa_sex <- read_csv("iron_tolerance_pupa_sex.csv")
+adult_sex <- read_csv("iron_tolerance_adult_sex.csv")
+eggs <- read_csv("iron_tolerance_egg_counts.csv")
+hatch <- read_csv("iron_tolerance_hatch_counts.csv")
+```
+
+```{r view data}
+head(pupa_sex)
+```
+
+```{r functions to pivot tibbles and fix dates}
+pivot_no_sex <- function(df) {
+  df %>% 
+  mutate(Date = mdy(Date)) %>%
+  pivot_longer(cols = matches("..[0-2]"), names_to = c("Population", "Treatment"),
+               names_sep = 2, values_to = "Count", values_drop_na = TRUE)
+}
+
+pivot_sex <- function(df) {
+  df %>%
+  mutate(Date = mdy(Date)) %>%
+  pivot_longer(cols = matches("..[0-2]_*"), 
+               names_to = c("Population", "Treatment", "Sex"), 
+               names_pattern = "([A-Z]{2})([0-2])_([e-f]*male)", 
+               values_to = "Count", values_drop_na = TRUE)
+}
+```
+
+Pivot tables and format Date column:
+```{r}
+pupae <- pivot_no_sex(pupae)
+pupa_sex <- pupa_sex %>% 
+  rename(Date = `Date of Eclosion`) %>%
+  pivot_sex()
+(adult_sex <- adult_sex %>%
+  rename(Date = `Date of Death`) %>%
+  pivot_sex())
+eggs <- pivot_no_sex(eggs)
+hatch <- pivot_no_sex(hatch)
+```
+
+## Summary Statistics
+```{r pupae, eggs and hatch, message=FALSE}
+(pupae_sum <- pupae %>% 
+  group_by(Population, Treatment) %>%
+  summarise(total_pupae = sum(Count)) %>%
+   ungroup())
+
+(eggs_sum <- eggs %>%
+  group_by(Population, Treatment) %>%
+  summarize(total_eggs = sum(Count)) %>%
+    ungroup())
+
+(hatch_sum <- hatch %>%
+  group_by(Population, Treatment) %>%
+  summarize(total_hatch = sum(Count)) %>%
+    ungroup())
+```
+
+```{r eclosion}
+(pupa_sex_sum <- pupa_sex %>%
+  group_by(Population, Treatment, Sex) %>%
+  summarise(total_eclosed = sum(Count), 
+            mean_eclosion_date = weighted.mean(Date, Count/total_eclosed)) %>%
+   ungroup())
+```
+
+```{r death}
+(adult_sex_sum <- adult_sex %>%
+  group_by(Population, Treatment, Sex) %>%
+  summarise(total_dead = sum(Count), 
+            mean_death_date = weighted.mean(Date, Count/total_dead)) %>%
+   ungroup())
+```
+
+### Calculate Mean Adult Longevity (Mean Eclosion Date - Mean Death Date)
+```{r}
+(longev <- merge(pupa_sex_sum, adult_sex_sum, by = c("Population", "Treatment", "Sex")) %>% mutate(longevity = as.numeric(mean_death_date - mean_eclosion_date)) %>%
+  select(-c(total_eclosed, total_dead, mean_eclosion_date, mean_death_date)) %>% 
+  mutate(Treatment = factor(Treatment),
+         Sex = factor(Sex),
+         Biting_Propensity = factor(case_when(
+           Population %in% c("KC", "ML") ~ "Non-Biting",
+           Population %in% c("LI", "WI") ~ "Biting"))))
+```
+
+## Nested ANOVA, Sex and Longevity in each group
+```{r anova longevity}
+longev_anova <- aov(longevity ~ Treatment / Biting_Propensity / Sex, data = longev)
+summary(longev_anova)
+```
+### Eggs and Hatch Per Eclosed Female, Arcsin Transform % Hatched Eggs
+```{r eggs and hatch}
+(eggs_hatch <- pupa_sex_sum %>% 
+  filter(Sex == "female") %>% 
+  merge(eggs_sum, by = c("Population", "Treatment")) %>%
+   merge(hatch_sum, by = c("Population", "Treatment")) %>%
+  mutate(EggsPerFemale = total_eggs / total_eclosed, 
+         HatchPerFemale = total_hatch / total_eclosed, 
+         perc_hatched = total_hatch / total_eggs,
+         arcsin_ph = asin(sqrt(perc_hatched))) %>%
+  select(Population, Treatment, EggsPerFemale, HatchPerFemale, perc_hatched, arcsin_ph) %>%
+  mutate(Treatment = factor(Treatment),
+         Biting_Propensity = factor(case_when(
+           Population %in% c("KC", "ML") ~ "Non-Biting",
+           Population %in% c("LI", "WI") ~ "Biting"))))
+```
+
+## Nested ANOVA, Fertility, Fecundity, Reproductive Success
+```{r anova fertility (% eggs hatched)}
+fertility_anova <- aov(arcsin_ph ~ Treatment / Biting_Propensity, data = eggs_hatch)
+summary(fertility_anova)
+```
+
+```{r anova fecundity (eggs per female)}
+fecundity_anova <- aov(log(EggsPerFemale) ~ Treatment / Biting_Propensity, data = eggs_hatch)
+summary(fecundity_anova)
+```
+
+```{r anova reproductive success (hatch per female)}
+repsuccess_anova <- aov(log(HatchPerFemale) ~ Treatment / Biting_Propensity, data = eggs_hatch)
+summary(repsuccess_anova)
+```
+
+## Figures
+
+```{r longevity figure, warning= FALSE}
+longev %>% 
+  ggplot() + geom_point(aes(x = Treatment, y = longevity, shape = Sex, color = Biting_Propensity), size = 8, stroke = 1.25, position = position_dodge(width = 0.5)) + 
+  labs(x = "Iron Treatment", y = "Mean Longevity (Days)", title =  "Mean Adult Longevity of Males and Females", caption = "Ferrous sulfate concentrations:\n0: 0mg/mL, 1: 13mg/mL, 2: 130 mg/mL.\nSignificance of nested ANOVA is given by: *P<0.05") + 
+  theme_classic() + scale_shape_manual(values = c(1, 2)) + 
+  scale_color_manual(values = c("red", "dodgerblue")) + ylim(0, 20) + 
+  annotate("text", x = 0.75, y = 2, label = expression(atop(Fe^"*",
+                                                    Biting^"*")))
+```
+```{r fecundity figure, warning=FALSE}
+eggs_hatch %>% 
+  ggplot() + geom_point(aes(x = Treatment, y = log10(EggsPerFemale), color = Biting_Propensity), shape = 1, size = 8, stroke = 1.25, position = position_dodge(width = 0.5)) + 
+  labs(x = "Iron Treatment", y = "Log(Eggs per Female)", title =  "Lifetime Fecundity", subtitle = "Eggs Per Eclosed Females", caption = "Ferrous sulfate concentrations:\n0: 0mg/mL, 1: 13mg/mL, 2: 130 mg/mL.\nSignificance of nested ANOVA is given by: *P<0.05") + 
+  theme_classic() + 
+  scale_color_manual(values = c("red", "dodgerblue")) + ylim(0, 2) + 
+  annotate("text", x = 0.75, y = 0.25, label = expression(Biting^"*"))
+```
+
+```{r reproductive success figure, warning=FALSE}
+eggs_hatch %>% 
+  ggplot() + geom_point(aes(x = Treatment, y = log10(HatchPerFemale), color = Biting_Propensity), shape = 1, size = 8, stroke = 1.25, position = position_dodge(width = 0.5)) + 
+  labs(x = "Iron Treatment", y = "Log(Hatch per Female)", title =  "Lifetime Reproductive Success", subtitle = "Hatch Per Eclosed Females", caption = "Ferrous sulfate concentrations:\n0: 0mg/mL, 1: 13mg/mL, 2: 130 mg/mL.\nSignificance of nested ANOVA is given by: *P<0.05") + 
+  theme_classic() + 
+  scale_color_manual(values = c("red", "dodgerblue")) + ylim(0, 2) + 
+  annotate("text", x = 0.75, y = 0.25, label = expression(Biting^"*"))
+```
+
+```{r fertility figure}
+eggs_hatch %>% 
+  ggplot() + geom_point(aes(x = Treatment, y = arcsin_ph, color = Biting_Propensity), shape = 1, size = 8, stroke = 1.25, position = position_dodge(width = 0.5)) + 
+  labs(x = "Iron Treatment", y = "Arcsine Transformed Frequency Hatched", title =  "Fertility", subtitle = "Frequency of Eggs Hatched", caption = "Ferrous sulfate concentrations:\n0: 0mg/mL, 1: 13mg/mL, 2: 130 mg/mL.") + 
+  theme_classic() + 
+  scale_color_manual(values = c("red", "dodgerblue")) + ylim(0, 2)
+```
+
